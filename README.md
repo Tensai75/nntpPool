@@ -1,7 +1,7 @@
 nntpPool.go
 =======
 
-An NNTP connection pool package for go (golang) using  [Tensai75/nntp](github.com/Tensai75/nntp) for the NNTP connections.
+An NNTP connection pool package for go (golang) using  [Tensai75/nntp](https://github.com/Tensai75/nntp) for the NNTP connections.
 
 Example
 -------
