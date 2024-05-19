@@ -9,18 +9,19 @@ Example
 ```go
 	// create a pool
 	pool, err := nntpPool.New(&nntpPool.Config{
-		Host:         "news.newshosting.com",
-		Port:         119,
-		SSL:          false,
-		SkipSSLCheck: true,
-		User:         "username",
-		Pass:         "password",
-		ConnRetries:  3,
-		ConnWaitTime: 10,
-		MinConns:     0,
-		MaxConns:     20,
-		IdleTimeout:  30,
-	})
+		Name:                  "Newshosting",
+		Host:                  "news.newshosting.com",
+		Port:                  119,
+		SSL:                   false,
+		SkipSSLCheck:          true,
+		User:                  "username",
+		Pass:                  "password",
+		MaxConns:              50,
+		ConnWaitTime:          10,
+		IdleTimeout:           30,
+		MaxTooManyConnsErrors: 3,
+		MaxConnErrors:         3,
+	}, 0)
 	if err != nil {
 		log.Fatal("unable to create the connection pool")
 	}
