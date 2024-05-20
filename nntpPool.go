@@ -391,6 +391,10 @@ func (cp *connectionPool) addConnHandler() {
 							cp.closeConn(&nntpConn)
 						}
 					}
+				} else {
+					cp.connsMutex.Unlock()
+					cp.closeConn(&conn)
+					return
 				}
 
 			}
