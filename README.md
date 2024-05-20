@@ -7,6 +7,8 @@ Example
 -------
 
 ```go
+	initialConnections := uint32(10)
+
 	// create a pool
 	pool, err := nntpPool.New(&nntpPool.Config{
 		Name:                  "Newshosting",
@@ -19,9 +21,10 @@ Example
 		MaxConns:              50,
 		ConnWaitTime:          10,
 		IdleTimeout:           30,
+		HealthCheck:           true,
 		MaxTooManyConnsErrors: 3,
 		MaxConnErrors:         3,
-	}, 0)
+	}, initialConnections)
 	if err != nil {
 		log.Fatal("unable to create the connection pool")
 	}

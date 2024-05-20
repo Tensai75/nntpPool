@@ -21,6 +21,7 @@ var (
 	errMaxConnsShouldBePositive = errors.New("max conns should be greater than 0")
 	errConsIsGreaterThanMax     = errors.New("initial amount of connections should be lower than or equal to max conns")
 	errPoolWasClosed            = errors.New("connection pool was closed")
+	errConnIsNil                = errors.New("connection is nil")
 )
 
 type ConnectionPool interface {
@@ -57,6 +58,8 @@ type Config struct {
 	ConnWaitTime time.Duration
 	// Duartion after idle connections will be closed
 	IdleTimeout time.Duration
+	// Check health of connection befor passing it on
+	HealthCheck bool
 	// Number of max "too many connections" errors after which MaxConns is automatically reduced (0 = disabled)
 	MaxTooManyConnsErrors uint32
 	// Number of max consecutive connection errors after which the pool fails if no connection could be established at all (0 = disabled)
@@ -83,6 +86,7 @@ type connectionPool struct {
 	maxConns              uint32
 	connWaitTime          time.Duration
 	idleTimeout           time.Duration
+	healthCheck           bool
 	maxTooManyConnsErrors uint32
 	maxConnErrors         uint32
 
@@ -125,6 +129,7 @@ func New(cfg *Config, initialConns uint32) (ConnectionPool, error) {
 		maxConns:              cfg.MaxConns,
 		connWaitTime:          cfg.ConnWaitTime,
 		idleTimeout:           cfg.IdleTimeout,
+		healthCheck:           cfg.HealthCheck,
 		maxTooManyConnsErrors: cfg.MaxTooManyConnsErrors,
 		maxConnErrors:         cfg.MaxConnErrors,
 
@@ -316,10 +321,12 @@ func (cp *connectionPool) checkConnIsHealthy(conn NNTPConn) bool {
 		return false
 	}
 	// closing unhealthy connection
-	if err := conn.ping(); err != nil {
-		cp.debug("closing unhealthy connection")
-		cp.closeConn(&conn)
-		return false
+	if cp.healthCheck {
+		if err := conn.ping(); err != nil {
+			cp.debug("closing unhealthy connection")
+			cp.closeConn(&conn)
+			return false
+		}
 	}
 	return true
 }
@@ -424,13 +431,10 @@ func (c *NNTPConn) close() error {
 }
 
 func (c *NNTPConn) ping() error {
-	return nil
-	/*
-		if c.Conn != nil {
-			_, err := c.Conn.Date()
-			return err
-		} else {
-			return errConnIsNil
-		}
-	*/
+	if c.Conn != nil {
+		_, err := c.Conn.Date()
+		return err
+	} else {
+		return errConnIsNil
+	}
 }
