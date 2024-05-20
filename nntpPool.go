@@ -72,9 +72,8 @@ type NNTPConn struct {
 }
 
 type connectionPool struct {
-	connsMutex  sync.RWMutex
-	connsChan   chan NNTPConn
-	addConnChan chan connRequest
+	connsMutex sync.RWMutex
+	connsChan  chan NNTPConn
 
 	name                  string
 	host                  string
@@ -115,9 +114,8 @@ func New(cfg *Config, initialConns uint32) (ConnectionPool, error) {
 	}
 
 	pool := &connectionPool{
-		connsMutex:  sync.RWMutex{},
-		connsChan:   make(chan NNTPConn, cfg.MaxConns),
-		addConnChan: make(chan connRequest, cfg.MaxConns),
+		connsMutex: sync.RWMutex{},
+		connsChan:  make(chan NNTPConn, cfg.MaxConns),
 
 		name:                  cfg.Name,
 		host:                  cfg.Host,
@@ -138,8 +136,6 @@ func New(cfg *Config, initialConns uint32) (ConnectionPool, error) {
 		fatalError:   nil,
 		serverLimit:  cfg.MaxConns,
 	}
-
-	go pool.addConnHandler()
 
 	for i := uint32(0); i < initialConns; i++ {
 		pool.startupWG.Add(1)
@@ -242,10 +238,6 @@ func (cp *connectionPool) Close() {
 			go conn.close()
 		}
 	}
-	if cp.addConnChan != nil {
-		cp.debug("closing add connection channel")
-		close(cp.addConnChan)
-	}
 	cp.debug("pool closed")
 }
 
@@ -296,11 +288,83 @@ func (cp *connectionPool) factory() (*nntp.Conn, error) {
 }
 
 func (cp *connectionPool) addConn() {
-	cp.connsMutex.Lock()
-	defer cp.connsMutex.Unlock()
-	if !cp.closed {
-		cp.addConnChan <- connRequest{}
-	}
+	go func() {
+		defer func() {
+			if !cp.created {
+				cp.startupWG.Done()
+			}
+		}()
+		cp.connsMutex.Lock()
+		if cp.connAttempts < cp.serverLimit {
+			cp.connAttempts++
+			cp.connsMutex.Unlock()
+
+			// try to open the connection
+			conn, err := cp.factory()
+
+			cp.connsMutex.Lock()
+			if !cp.closed {
+				if err != nil {
+					// connection error
+					cp.error(err)
+					cp.connAttempts--
+					if cp.maxTooManyConnsErrors > 0 && (err.Error()[0:3] == "482" || err.Error()[0:3] == "502") && cp.conns > 0 {
+						// too many connection errors
+						cp.tooManyConnsErrors++
+						if cp.tooManyConnsErrors >= cp.maxTooManyConnsErrors && cp.serverLimit > cp.conns {
+							cp.serverLimit = cp.conns
+							cp.error(fmt.Errorf("reducing max connections to %v due to repeated 'too many connections' error", cp.serverLimit))
+						}
+					} else {
+						// other errors
+						if cp.maxConnErrors > 0 {
+							cp.connErrors++
+							if cp.connErrors >= cp.maxConnErrors && cp.conns == 0 {
+								cp.fatalError = fmt.Errorf("unable to establish a connection  - last error was: %v", err)
+								cp.connsMutex.Unlock()
+								cp.error(cp.fatalError)
+								cp.Close()
+								return
+							}
+						}
+					}
+					cp.connsMutex.Unlock()
+					go func() {
+						cp.debug(fmt.Sprintf("waiting %v seconds for next connection retry", cp.connWaitTime))
+						time.Sleep(cp.connWaitTime)
+						cp.addConn()
+					}()
+				} else {
+					// connection successfull
+					cp.tooManyConnsErrors = 0
+					cp.connErrors = 0
+					select {
+					// try to push connection to the connections channel
+					case cp.connsChan <- NNTPConn{
+						Conn:      conn,
+						timestamp: time.Now(),
+					}:
+						cp.conns++
+						cp.debug(fmt.Sprintf("new connection opened (%v of %v connections available)", cp.conns, cp.serverLimit))
+						cp.connsMutex.Unlock()
+
+					// if the connections channel is full, close the connection
+					default:
+						cp.connsMutex.Unlock()
+						conn.close()
+					}
+				}
+			} else {
+				// if pool is closed close the new connection
+				cp.connsMutex.Unlock()
+				conn.close()
+			}
+		} else {
+			// ignoring the connection attempt
+			cp.debug(fmt.Sprintf("ignoring new connection attempt (current connection attempts: %v | current server limit: %v connections)", cp.connAttempts, cp.serverLimit))
+			cp.connsMutex.Unlock()
+		}
+	}()
 }
 
 func (cp *connectionPool) closeConn(conn *NNTPConn) {
@@ -329,84 +393,6 @@ func (cp *connectionPool) checkConnIsHealthy(conn NNTPConn) bool {
 		}
 	}
 	return true
-}
-
-func (cp *connectionPool) addConnHandler() {
-	for range cp.addConnChan {
-		go func() {
-			cp.connsMutex.Lock()
-			if cp.connAttempts < cp.serverLimit {
-				cp.connAttempts++
-				cp.connsMutex.Unlock()
-				connStartTime := time.Now()
-
-				// try to open the connection
-				conn, err := cp.factory()
-
-				cp.connsMutex.Lock()
-				if !cp.closed {
-					if err != nil {
-						// connection error
-						cp.error(err)
-						cp.connAttempts--
-						if cp.maxTooManyConnsErrors > 0 && (err.Error()[0:3] == "482" || err.Error()[0:3] == "502") && cp.conns > 0 {
-							cp.tooManyConnsErrors++
-							if cp.tooManyConnsErrors >= cp.maxTooManyConnsErrors && cp.serverLimit > cp.conns {
-								cp.serverLimit = cp.conns
-								cp.error(fmt.Errorf("reducing max connections to %v due to repeated 'too many connections' error", cp.serverLimit))
-							}
-						} else {
-							if cp.maxConnErrors > 0 {
-								cp.connErrors++
-								if cp.connErrors >= cp.maxConnErrors && cp.conns == 0 {
-									cp.fatalError = fmt.Errorf("unable to establish a connection after %v retries  - last error was: %v", cp.connErrors-1, err)
-									cp.error(cp.fatalError)
-									cp.connsMutex.Unlock()
-									cp.Close()
-									return
-								}
-							}
-						}
-						go func() {
-							cp.debug(fmt.Sprintf("waiting %v seconds for next connection retry", cp.connWaitTime))
-							time.Sleep(cp.connWaitTime)
-							cp.addConnChan <- connRequest{}
-						}()
-						cp.connsMutex.Unlock()
-					} else {
-						// connection successfull
-						cp.debug(fmt.Sprintf("connection took %v", time.Since(connStartTime)))
-						cp.tooManyConnsErrors = 0
-						cp.connErrors = 0
-						nntpConn := NNTPConn{
-							Conn:      conn,
-							timestamp: time.Now(),
-						}
-						select {
-						// push connection to the connections channel
-						case cp.connsChan <- nntpConn:
-							cp.conns++
-							cp.debug(fmt.Sprintf("new connection opened (%v of %v connections available)", cp.conns, cp.serverLimit))
-							cp.connsMutex.Unlock()
-							// if the connections channel is full, close the connection
-						default:
-							cp.connsMutex.Unlock()
-							cp.closeConn(&nntpConn)
-						}
-					}
-				} else {
-					cp.connsMutex.Unlock()
-					cp.closeConn(&conn)
-				}
-
-			} else {
-				cp.connsMutex.Unlock()
-			}
-			if !cp.created {
-				cp.startupWG.Done()
-			}
-		}()
-	}
 }
 
 func (cp *connectionPool) log(text string) {
