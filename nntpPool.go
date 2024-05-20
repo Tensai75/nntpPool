@@ -372,6 +372,7 @@ func (cp *connectionPool) addConnHandler() {
 							time.Sleep(cp.connWaitTime)
 							cp.addConnChan <- connRequest{}
 						}()
+						cp.connsMutex.Unlock()
 					} else {
 						// connection successfull
 						cp.debug(fmt.Sprintf("connection took %v", time.Since(connStartTime)))
@@ -386,19 +387,21 @@ func (cp *connectionPool) addConnHandler() {
 						case cp.connsChan <- nntpConn:
 							cp.conns++
 							cp.debug(fmt.Sprintf("new connection opened (%v of %v connections available)", cp.conns, cp.serverLimit))
+							cp.connsMutex.Unlock()
 							// if the connections channel is full, close the connection
 						default:
+							cp.connsMutex.Unlock()
 							cp.closeConn(&nntpConn)
 						}
 					}
 				} else {
 					cp.connsMutex.Unlock()
 					cp.closeConn(&conn)
-					return
 				}
 
+			} else {
+				cp.connsMutex.Unlock()
 			}
-			cp.connsMutex.Unlock()
 			if !cp.created {
 				cp.startupWG.Done()
 			}
