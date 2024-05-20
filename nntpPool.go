@@ -351,14 +351,14 @@ func (cp *connectionPool) addConnHandler() {
 						cp.connAttempts--
 						if cp.maxTooManyConnsErrors > 0 && (err.Error()[0:3] == "482" || err.Error()[0:3] == "502") && cp.conns > 0 {
 							cp.tooManyConnsErrors++
-							if cp.tooManyConnsErrors > cp.maxTooManyConnsErrors && cp.serverLimit > cp.conns {
+							if cp.tooManyConnsErrors >= cp.maxTooManyConnsErrors && cp.serverLimit > cp.conns {
 								cp.serverLimit = cp.conns
 								cp.error(fmt.Errorf("reducing max connections to %v due to repeated 'too many connections' error", cp.serverLimit))
 							}
 						} else {
 							if cp.maxConnErrors > 0 {
 								cp.connErrors++
-								if cp.connErrors > cp.maxConnErrors && cp.conns == 0 {
+								if cp.connErrors >= cp.maxConnErrors && cp.conns == 0 {
 									cp.fatalError = fmt.Errorf("unable to establish a connection after %v retries  - last error was: %v", cp.connErrors-1, err)
 									cp.error(cp.fatalError)
 									cp.connsMutex.Unlock()
