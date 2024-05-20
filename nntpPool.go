@@ -294,76 +294,89 @@ func (cp *connectionPool) addConn() {
 				cp.startupWG.Done()
 			}
 		}()
+
 		cp.connsMutex.Lock()
-		if cp.connAttempts < cp.serverLimit {
-			cp.connAttempts++
-			cp.connsMutex.Unlock()
-
-			// try to open the connection
-			conn, err := cp.factory()
-
-			cp.connsMutex.Lock()
-			if !cp.closed {
-				if err != nil {
-					// connection error
-					cp.error(err)
-					cp.connAttempts--
-					if cp.maxTooManyConnsErrors > 0 && (err.Error()[0:3] == "482" || err.Error()[0:3] == "502") && cp.conns > 0 {
-						// too many connection errors
-						cp.tooManyConnsErrors++
-						if cp.tooManyConnsErrors >= cp.maxTooManyConnsErrors && cp.serverLimit > cp.conns {
-							cp.serverLimit = cp.conns
-							cp.error(fmt.Errorf("reducing max connections to %v due to repeated 'too many connections' error", cp.serverLimit))
-						}
-					} else {
-						// other errors
-						if cp.maxConnErrors > 0 {
-							cp.connErrors++
-							if cp.connErrors >= cp.maxConnErrors && cp.conns == 0 {
-								cp.fatalError = fmt.Errorf("unable to establish a connection  - last error was: %v", err)
-								cp.connsMutex.Unlock()
-								cp.error(cp.fatalError)
-								cp.Close()
-								return
-							}
-						}
-					}
-					cp.connsMutex.Unlock()
-					go func() {
-						cp.debug(fmt.Sprintf("waiting %v seconds for next connection retry", cp.connWaitTime))
-						time.Sleep(cp.connWaitTime)
-						cp.addConn()
-					}()
-				} else {
-					// connection successfull
-					cp.tooManyConnsErrors = 0
-					cp.connErrors = 0
-					select {
-					// try to push connection to the connections channel
-					case cp.connsChan <- NNTPConn{
-						Conn:      conn,
-						timestamp: time.Now(),
-					}:
-						cp.conns++
-						cp.debug(fmt.Sprintf("new connection opened (%v of %v connections available)", cp.conns, cp.serverLimit))
-						cp.connsMutex.Unlock()
-
-					// if the connections channel is full, close the connection
-					default:
-						cp.connsMutex.Unlock()
-						conn.close()
-					}
-				}
-			} else {
-				// if pool is closed close the new connection
-				cp.connsMutex.Unlock()
-				conn.close()
-			}
-		} else {
-			// ignoring the connection attempt
+		if cp.connAttempts >= cp.serverLimit {
+			// ignoring the connection attempt if there are already too many attempts
 			cp.debug(fmt.Sprintf("ignoring new connection attempt (current connection attempts: %v | current server limit: %v connections)", cp.connAttempts, cp.serverLimit))
 			cp.connsMutex.Unlock()
+			return
 		}
+
+		// try to open the connection
+		cp.connAttempts++
+		cp.connsMutex.Unlock()
+		conn, err := cp.factory()
+		cp.connsMutex.Lock()
+
+		// abort function for reducing conAttempts counter and closing the connection
+		abort := func() {
+			cp.connAttempts--
+			if conn != nil {
+				conn.Quit()
+			}
+		}
+
+		if cp.closed {
+			// if pool was closed meanwhile, abort
+			abort()
+			cp.connsMutex.Unlock()
+			return
+		}
+
+		// connection error
+		if err != nil {
+			cp.error(err)
+			// abort and handle error
+			abort()
+			if cp.maxTooManyConnsErrors > 0 && (err.Error()[0:3] == "482" || err.Error()[0:3] == "502") && cp.conns > 0 {
+				// handle too many connections error
+				cp.tooManyConnsErrors++
+				if cp.tooManyConnsErrors >= cp.maxTooManyConnsErrors && cp.serverLimit > cp.conns {
+					cp.serverLimit = cp.conns
+					cp.error(fmt.Errorf("reducing max connections to %v due to repeated 'too many connections' error", cp.serverLimit))
+				}
+			} else {
+				// handle any other error
+				if cp.maxConnErrors > 0 {
+					cp.connErrors++
+					if cp.connErrors >= cp.maxConnErrors && cp.conns == 0 {
+						cp.fatalError = fmt.Errorf("unable to establish a connection  - last error was: %v", err)
+						cp.connsMutex.Unlock()
+						cp.error(cp.fatalError)
+						cp.Close()
+						return
+					}
+				}
+			}
+			cp.connsMutex.Unlock()
+			// retry to connect
+			go func() {
+				cp.debug(fmt.Sprintf("waiting %v seconds for next connection retry", cp.connWaitTime))
+				time.Sleep(cp.connWaitTime)
+				cp.addConn()
+			}()
+			return
+		}
+
+		// connection successfull
+		cp.tooManyConnsErrors = 0
+		cp.connErrors = 0
+
+		select {
+		// try to push connection to the connections channel
+		case cp.connsChan <- NNTPConn{
+			Conn:      conn,
+			timestamp: time.Now(),
+		}:
+			cp.conns++
+			cp.debug(fmt.Sprintf("new connection opened (%v of %v connections available)", cp.conns, cp.serverLimit))
+
+		// if the connection channel is full, abort
+		default:
+			abort()
+		}
+		cp.connsMutex.Unlock()
 	}()
 }
 
