@@ -384,7 +384,7 @@ func (cp *connectionPool) closeConn(conn *NNTPConn) {
 	defer cp.connsMutex.Unlock()
 	cp.conns--
 	cp.connAttempts--
-	cp.debug(fmt.Sprintf("%v of %v connections available", cp.conns, cp.maxConns))
+	cp.debug(fmt.Sprintf("connection closed (%v of %v connections available)", cp.conns, cp.serverLimit))
 	conn.close()
 }
 
