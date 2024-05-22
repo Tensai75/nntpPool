@@ -291,6 +291,11 @@ func (cp *connectionPool) addConn() {
 		}()
 
 		cp.connsMutex.Lock()
+		if cp.closed {
+			// pool is already closed
+			cp.connsMutex.Unlock()
+			return
+		}
 		if cp.connAttempts >= cp.serverLimit {
 			// ignoring the connection attempt if there are already too many attempts
 			cp.debug(fmt.Sprintf("ignoring new connection attempt (current connection attempts: %v | current server limit: %v connections)", cp.connAttempts, cp.serverLimit))
