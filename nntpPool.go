@@ -217,15 +217,13 @@ func (cp *connectionPool) Put(conn *NNTPConn) {
 
 // Closes all connections and pool.
 func (cp *connectionPool) Close() {
-	cp.debug("closing pool")
 	cp.connsMutex.Lock()
 	defer cp.connsMutex.Unlock()
 	if cp.closed {
-		cp.debug("pool is already closed")
+		// pool is already closed
 		return
 	}
-	cp.closed = true
-
+	cp.debug("closing pool")
 	if cp.connsChan != nil {
 		cp.debug("closing connection channel")
 		close(cp.connsChan)
@@ -234,6 +232,9 @@ func (cp *connectionPool) Close() {
 			go conn.close()
 		}
 	}
+	cp.closed = true
+	cp.conns = 0
+	cp.connAttempts = 0
 	cp.debug("pool closed")
 }
 
