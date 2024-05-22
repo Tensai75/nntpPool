@@ -186,11 +186,7 @@ func (cp *connectionPool) Get(ctx context.Context) (*NNTPConn, error) {
 			return &conn, nil
 
 		default:
-			cp.connsMutex.Lock()
-			if cp.connAttempts < cp.serverLimit {
-				go cp.addConn()
-			}
-			cp.connsMutex.Unlock()
+			go cp.addConn()
 			conn, ok := <-cp.connsChan
 			if !ok {
 				return nil, errPoolWasClosed
