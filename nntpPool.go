@@ -92,7 +92,6 @@ type connectionPool struct {
 
 	conns              uint32
 	connAttempts       uint32
-	lastConnTime       time.Time
 	closed             bool
 	fatalError         error
 	serverLimit        uint32
@@ -132,10 +131,9 @@ func New(cfg *Config, initialConns uint32) (ConnectionPool, error) {
 		maxTooManyConnsErrors: cfg.MaxTooManyConnsErrors,
 		maxConnErrors:         cfg.MaxConnErrors,
 
-		closed:       false,
-		lastConnTime: time.Now(),
-		fatalError:   nil,
-		serverLimit:  cfg.MaxConns,
+		closed:      false,
+		fatalError:  nil,
+		serverLimit: cfg.MaxConns,
 	}
 
 	for i := uint32(0); i < initialConns; i++ {
