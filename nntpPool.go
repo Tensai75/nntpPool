@@ -26,9 +26,9 @@ var (
 )
 
 type ConnectionPool interface {
-	// Returns number of used and total opened connections.
+	// Returns number of currently used and total opened connections.
 	Conns() (uint32, uint32)
-	// Returns number of max opened connections.
+	// Returns the maximum number of simultaneously used connections.
 	MaxConns() uint32
 	// Retrieves connection from pool if it exists or opens new connection.
 	Get(ctx context.Context) (*NNTPConn, error)
