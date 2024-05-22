@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	WarnChan  = make(chan error, 10)
-	LogChan   = make(chan string, 10)
-	DebugChan = make(chan string, 10)
+	// message channels
+	WarnChan  = make(chan error, 10)  // warning messages (errors which did not cause the pool to fail)
+	LogChan   = make(chan string, 10) // informative messages
+	DebugChan = make(chan string, 10) // additional debug messages
 )
 
 var (
