@@ -250,8 +250,6 @@ func (cp *connectionPool) Conns() (uint32, uint32) {
 
 // Returns number of max used connections.
 func (cp *connectionPool) MaxConns() uint32 {
-	cp.connsMutex.Lock()
-	defer cp.connsMutex.Unlock()
 	return cp.maxConnsUsed
 }
 
