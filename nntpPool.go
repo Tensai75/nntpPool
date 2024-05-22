@@ -204,6 +204,7 @@ func (cp *connectionPool) Put(conn *NNTPConn) {
 	if !cp.closed {
 		select {
 		case cp.connsChan <- NNTPConn{Conn: conn.Conn, timestamp: time.Now()}:
+			cp.debug("connection successfully returned to the pool")
 			return
 		default:
 			cp.debug("closing returned connection because pool is full")
