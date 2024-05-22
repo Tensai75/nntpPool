@@ -176,6 +176,9 @@ func (cp *connectionPool) Get(ctx context.Context) (*NNTPConn, error) {
 
 		case conn, ok := <-cp.connsChan:
 			if !ok {
+				if cp.fatalError != nil {
+					return nil, cp.fatalError
+				}
 				return nil, errPoolWasClosed
 			}
 			if !cp.checkConnIsHealthy(conn) {
@@ -187,6 +190,9 @@ func (cp *connectionPool) Get(ctx context.Context) (*NNTPConn, error) {
 			go cp.addConn()
 			conn, ok := <-cp.connsChan
 			if !ok {
+				if cp.fatalError != nil {
+					return nil, cp.fatalError
+				}
 				return nil, errPoolWasClosed
 			}
 			if !cp.checkConnIsHealthy(conn) {
