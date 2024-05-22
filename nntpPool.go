@@ -205,8 +205,6 @@ func (cp *connectionPool) Get(ctx context.Context) (*NNTPConn, error) {
 
 // Returns connection to the pool.
 func (cp *connectionPool) Put(conn *NNTPConn) {
-	cp.connsMutex.Lock()
-	defer cp.connsMutex.Unlock()
 	if !cp.closed {
 		select {
 		case cp.connsChan <- NNTPConn{Conn: conn.Conn, timestamp: time.Now()}:
