@@ -199,6 +199,7 @@ func (cp *connectionPool) Get(ctx context.Context) (*NNTPConn, error) {
 
 // Returns connection to the pool.
 func (cp *connectionPool) Put(conn *NNTPConn) {
+	cp.connsMutex.Lock()
 	if !cp.closed {
 		select {
 		case cp.connsChan <- NNTPConn{Conn: conn.Conn, timestamp: time.Now()}:
@@ -210,6 +211,7 @@ func (cp *connectionPool) Put(conn *NNTPConn) {
 	} else {
 		cp.debug("closing returned connection because pool is closed")
 	}
+	cp.connsMutex.Unlock()
 	cp.closeConn(conn)
 }
 
