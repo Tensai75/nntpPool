@@ -385,8 +385,8 @@ func (cp *connectionPool) closeConn(conn *NNTPConn) {
 	defer cp.connsMutex.Unlock()
 	cp.conns--
 	cp.connAttempts--
-	cp.debug(fmt.Sprintf("connection closed (%v of %v connections available)", cp.conns, cp.serverLimit))
 	conn.close()
+	cp.debug(fmt.Sprintf("connection closed (%v of %v connections available)", cp.conns, cp.serverLimit))
 }
 
 func (cp *connectionPool) checkConnIsHealthy(conn NNTPConn) bool {
