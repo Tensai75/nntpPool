@@ -70,6 +70,7 @@ type Config struct {
 type NNTPConn struct {
 	*nntp.Conn
 	timestamp time.Time
+	closed    bool
 }
 
 type connectionPool struct {
@@ -233,7 +234,7 @@ func (cp *connectionPool) Close() {
 		close(cp.connsChan)
 		cp.debug("closing open connections")
 		for conn := range cp.connsChan {
-			go conn.close()
+			conn.close()
 		}
 	}
 	cp.closed = true
@@ -433,11 +434,13 @@ func (cp *connectionPool) debug(text string) {
 	}
 }
 
-func (c *NNTPConn) close() error {
-	if c.Conn != nil {
-		return c.Conn.Quit()
+func (c *NNTPConn) close() {
+	if !c.closed {
+		if c.Conn != nil {
+			go c.Conn.Quit()
+		}
+		c.closed = true
 	}
-	return nil
 }
 
 func (c *NNTPConn) ping() error {
