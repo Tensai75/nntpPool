@@ -13,6 +13,7 @@ import (
 
 var (
 	// message channels
+	ErrorChan = make(chan error, 10)  // error messages (if pool has failed)
 	WarnChan  = make(chan error, 10)  // warning messages (errors which did not cause the pool to fail)
 	LogChan   = make(chan string, 10) // informative messages
 	DebugChan = make(chan string, 10) // additional debug messages
@@ -331,7 +332,7 @@ func (cp *connectionPool) addConn() {
 
 		// connection error
 		if err != nil {
-			cp.error(err)
+			cp.warn(err)
 			// abort and handle error
 			abort()
 			if cp.maxTooManyConnsErrors > 0 && (err.Error()[0:3] == "482" || err.Error()[0:3] == "502") && cp.conns > 0 {
@@ -339,7 +340,7 @@ func (cp *connectionPool) addConn() {
 				cp.tooManyConnsErrors++
 				if cp.tooManyConnsErrors >= cp.maxTooManyConnsErrors && cp.serverLimit > cp.conns {
 					cp.serverLimit = cp.conns
-					cp.error(fmt.Errorf("reducing max connections to %v due to repeated 'too many connections' error", cp.serverLimit))
+					cp.debug(fmt.Sprintf("reducing max connections to %v due to repeated 'too many connections' error", cp.serverLimit))
 				}
 			} else {
 				// handle any other error
@@ -421,6 +422,13 @@ func (cp *connectionPool) log(text string) {
 }
 
 func (cp *connectionPool) error(err error) {
+	select {
+	case ErrorChan <- fmt.Errorf("%s: %v", cp.name, err):
+	default:
+	}
+}
+
+func (cp *connectionPool) warn(err error) {
 	select {
 	case WarnChan <- fmt.Errorf("%s: %v", cp.name, err):
 	default:
