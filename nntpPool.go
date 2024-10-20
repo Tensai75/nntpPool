@@ -2,7 +2,6 @@ package nntpPool
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"sync"
@@ -20,10 +19,8 @@ var (
 )
 
 var (
-	errMaxConnsShouldBePositive = errors.New("max conns should be greater than 0")
-	errConsIsGreaterThanMax     = errors.New("initial amount of connections should be lower than or equal to max conns")
-	errPoolWasClosed            = errors.New("connection pool was closed")
-	errConnIsNil                = errors.New("connection is nil")
+	errPoolWasClosed = errors.New("connection pool was closed")
+	errConnIsNil     = errors.New("connection is nil")
 )
 
 type ConnectionPool interface {
@@ -68,72 +65,78 @@ type Config struct {
 	MaxConnErrors uint32
 }
 
+type MultiConfig struct {
+	Name      string
+	Providers []*Config
+}
+
 type NNTPConn struct {
 	*nntp.Conn
+	provider  *provider
 	timestamp time.Time
 	closed    bool
 }
 
 type connectionPool struct {
-	connsMutex sync.RWMutex
-	connsChan  chan NNTPConn
-
-	name                  string
-	host                  string
-	port                  uint32
-	ssl                   bool
-	skipSslCheck          bool
-	user                  string
-	pass                  string
-	maxConns              uint32
-	connWaitTime          time.Duration
-	idleTimeout           time.Duration
-	healthCheck           bool
-	maxTooManyConnsErrors uint32
-	maxConnErrors         uint32
-
-	conns              uint32
-	connAttempts       uint32
-	closed             bool
-	fatalError         error
-	serverLimit        uint32
-	tooManyConnsErrors uint32
-	connErrors         uint32
-	startupWG          sync.WaitGroup
-	created            bool
-	maxConnsUsed       uint32
+	name         string
+	connsMutex   sync.RWMutex
+	connsChan    chan NNTPConn
+	providers    []*provider
+	maxConns     uint32
+	conns        uint32
+	connAttempts uint32
+	closed       bool
+	fatalError   error
+	poolLimit    uint32
+	startupWG    sync.WaitGroup
+	created      bool
+	maxConnsUsed uint32
 }
 
 // Opens new connection pool.
-func New(cfg *Config, initialConns uint32) (ConnectionPool, error) {
-	switch {
-	case cfg.MaxConns <= 0:
-		return nil, errMaxConnsShouldBePositive
-	case initialConns > cfg.MaxConns:
-		return nil, errConsIsGreaterThanMax
+func New(c interface{}, initialConns uint32) (ConnectionPool, error) {
+
+	config := new(MultiConfig)
+	switch t := c.(type) {
+	case *MultiConfig:
+		config = t
+	case *Config:
+		config.Providers = append(config.Providers, t)
+		config.Name = t.Name
+	default:
+		return nil, errors.New("configuration must be type *Config or *Multiconfig")
 	}
 
-	pool := &connectionPool{
-		connsMutex: sync.RWMutex{},
-		connsChan:  make(chan NNTPConn, cfg.MaxConns),
+	if len(config.Providers) == 0 {
+		return nil, errors.New("no provider configuration provided")
+	}
 
-		name:                  cfg.Name,
-		host:                  cfg.Host,
-		port:                  cfg.Port,
-		ssl:                   cfg.SSL,
-		skipSslCheck:          cfg.SkipSSLCheck,
-		user:                  cfg.User,
-		pass:                  cfg.Pass,
-		maxConns:              cfg.MaxConns,
-		connWaitTime:          cfg.ConnWaitTime,
-		idleTimeout:           cfg.IdleTimeout,
-		healthCheck:           cfg.HealthCheck,
-		maxTooManyConnsErrors: cfg.MaxTooManyConnsErrors,
-		maxConnErrors:         cfg.MaxConnErrors,
+	pool := new(connectionPool)
+	pool.name = config.Name
+	for _, cfg := range config.Providers {
+		pool.providers = append(pool.providers, &provider{
+			name:                  cfg.Name,
+			host:                  cfg.Host,
+			port:                  cfg.Port,
+			ssl:                   cfg.SSL,
+			skipSslCheck:          cfg.SkipSSLCheck,
+			user:                  cfg.User,
+			pass:                  cfg.Pass,
+			maxConns:              cfg.MaxConns,
+			connWaitTime:          cfg.ConnWaitTime,
+			idleTimeout:           cfg.IdleTimeout,
+			healthCheck:           cfg.HealthCheck,
+			maxTooManyConnsErrors: cfg.MaxTooManyConnsErrors,
+			maxConnErrors:         cfg.MaxConnErrors,
+			serverLimit:           cfg.MaxConns,
+		})
+		pool.maxConns = pool.maxConns + cfg.MaxConns
+	}
+	pool.poolLimit = pool.maxConns
+	pool.connsChan = make(chan NNTPConn, pool.maxConns)
 
-		closed:      false,
-		fatalError:  nil,
-		serverLimit: cfg.MaxConns,
+	if initialConns > pool.poolLimit {
+		initialConns = pool.poolLimit
 	}
 
 	for i := uint32(0); i < initialConns; i++ {
@@ -208,7 +211,7 @@ func (cp *connectionPool) Put(conn *NNTPConn) {
 	cp.connsMutex.Lock()
 	if !cp.closed {
 		select {
-		case cp.connsChan <- NNTPConn{Conn: conn.Conn, timestamp: time.Now()}:
+		case cp.connsChan <- NNTPConn{Conn: conn.Conn, provider: conn.provider, timestamp: time.Now()}:
 			cp.connsMutex.Unlock()
 			return
 		default:
@@ -261,126 +264,49 @@ func (cp *connectionPool) MaxConns() uint32 {
 	return cp.maxConnsUsed
 }
 
-// factory function for the new nntp connections
-func (cp *connectionPool) factory() (*nntp.Conn, error) {
-	var conn *nntp.Conn
-	var err error
-	if cp.ssl {
-		sslConfig := tls.Config{
-			InsecureSkipVerify: cp.skipSslCheck,
-		}
-		conn, err = nntp.DialTLS("tcp", fmt.Sprintf("%v:%v", cp.host, cp.port), &sslConfig)
-	} else {
-		conn, err = nntp.Dial("tcp", fmt.Sprintf("%v:%v", cp.host, cp.port))
-	}
-	if err != nil {
-		if conn != nil {
-			conn.Quit()
-		}
-		return nil, err
-	}
-	if err = conn.Authenticate(cp.user, cp.pass); err != nil {
-		if conn != nil {
-			conn.Quit()
-		}
-		return nil, err
-	}
-	return conn, nil
-}
-
 func (cp *connectionPool) addConn() {
 	go func() {
-		defer func() {
-			if !cp.created {
-				cp.startupWG.Done()
-			}
-		}()
-
 		cp.connsMutex.Lock()
 		if cp.closed {
 			// pool is already closed
 			cp.connsMutex.Unlock()
 			return
 		}
-		if cp.connAttempts >= cp.serverLimit {
+		if cp.connAttempts >= cp.poolLimit {
 			// ignoring the connection attempt if there are already too many attempts
-			cp.debug(fmt.Sprintf("ignoring new connection attempt (current connection attempts: %v | current server limit: %v connections)", cp.connAttempts, cp.serverLimit))
+			cp.debug(fmt.Sprintf("ignoring new connection attempt (current connection attempts: %v | current pool limit: %v connections)", cp.connAttempts, cp.poolLimit))
 			cp.connsMutex.Unlock()
 			return
 		}
 
 		// try to open the connection
 		cp.connAttempts++
-		cp.connsMutex.Unlock()
-		conn, err := cp.factory()
-		cp.connsMutex.Lock()
-
-		// abort function for reducing conAttempts counter and closing the connection
-		abort := func() {
-			cp.connAttempts--
-			if conn != nil {
-				conn.Quit()
-			}
-		}
-
-		if cp.closed {
-			// if pool was closed meanwhile, abort
-			abort()
-			cp.connsMutex.Unlock()
-			return
-		}
-
-		// connection error
-		if err != nil {
-			cp.warn(err)
-			// abort and handle error
-			abort()
-			if cp.maxTooManyConnsErrors > 0 && (err.Error()[0:3] == "482" || err.Error()[0:3] == "502") && cp.conns > 0 {
-				// handle too many connections error
-				cp.tooManyConnsErrors++
-				if cp.tooManyConnsErrors >= cp.maxTooManyConnsErrors && cp.serverLimit > cp.conns {
-					cp.serverLimit = cp.conns
-					cp.debug(fmt.Sprintf("reducing max connections to %v due to repeated 'too many connections' error", cp.serverLimit))
-				}
+		var failed int
+		var fatalError error
+		for _, provider := range cp.providers {
+			provider.connsMutex.Lock()
+			if provider.failed {
+				failed++
+				fatalError = provider.fatalError
 			} else {
-				// handle any other error
-				if cp.maxConnErrors > 0 {
-					cp.connErrors++
-					if cp.connErrors >= cp.maxConnErrors && cp.conns == 0 {
-						cp.fatalError = fmt.Errorf("unable to establish a connection  - last error was: %v", err)
-						cp.connsMutex.Unlock()
-						cp.error(cp.fatalError)
-						cp.Close()
-						return
-					}
+				if provider.connAttempts < provider.serverLimit {
+					provider.connsMutex.Unlock()
+					cp.connsMutex.Unlock()
+					provider.addConn(cp)
+					return
 				}
 			}
-			cp.connsMutex.Unlock()
-			// retry to connect
-			go func() {
-				cp.debug(fmt.Sprintf("waiting %v seconds for next connection retry", cp.connWaitTime))
-				time.Sleep(cp.connWaitTime)
-				cp.addConn()
-			}()
-			return
+			provider.connsMutex.Unlock()
 		}
+		cp.connAttempts--
 
-		// connection successfull
-		cp.tooManyConnsErrors = 0
-		cp.connErrors = 0
-
-		select {
-		// try to push connection to the connections channel
-		case cp.connsChan <- NNTPConn{
-			Conn:      conn,
-			timestamp: time.Now(),
-		}:
-			cp.conns++
-			cp.debug(fmt.Sprintf("new connection opened (%v of %v connections available)", cp.conns, cp.serverLimit))
-
-		// if the connection channel is full, abort
-		default:
-			abort()
+		// if all provider have failed closed the pool
+		if len(cp.providers) == failed {
+			cp.fatalError = fatalError
+			cp.error(fmt.Errorf("pool failed - %v", cp.fatalError))
+			cp.connsMutex.Unlock()
+			cp.Close()
+			return
 		}
 		cp.connsMutex.Unlock()
 	}()
@@ -391,20 +317,24 @@ func (cp *connectionPool) closeConn(conn *NNTPConn) {
 	defer cp.connsMutex.Unlock()
 	cp.conns--
 	cp.connAttempts--
+	conn.provider.connsMutex.Lock()
+	conn.provider.conns--
+	conn.provider.connAttempts--
+	conn.provider.connsMutex.Unlock()
 	conn.close()
-	cp.debug(fmt.Sprintf("connection closed (%v of %v connections available)", cp.conns, cp.serverLimit))
+	cp.debug(fmt.Sprintf("connection closed (%v of %v connections available)", cp.conns, cp.poolLimit))
 }
 
 func (cp *connectionPool) checkConnIsHealthy(conn NNTPConn) bool {
 	// closing expired connection
-	if cp.idleTimeout > 0 &&
-		conn.timestamp.Add(cp.idleTimeout).Before(time.Now()) {
+	if conn.provider.idleTimeout > 0 &&
+		conn.timestamp.Add(conn.provider.idleTimeout).Before(time.Now()) {
 		cp.debug("closing expired connection")
 		cp.closeConn(&conn)
 		return false
 	}
 	// closing unhealthy connection
-	if cp.healthCheck {
+	if conn.provider.healthCheck {
 		if err := conn.ping(); err != nil {
 			cp.debug("closing unhealthy connection")
 			cp.closeConn(&conn)
