@@ -19,8 +19,10 @@ var (
 )
 
 var (
-	errPoolWasClosed = errors.New("connection pool was closed")
-	errConnIsNil     = errors.New("connection is nil")
+	errWrongConfigType  = errors.New("configuration must be type *Config or *Multiconfig")
+	errNoProviderConfig = errors.New("no provider configuration provided")
+	errPoolWasClosed    = errors.New("connection pool was closed")
+	errConnIsNil        = errors.New("connection is nil")
 )
 
 type ConnectionPool interface {
@@ -104,11 +106,11 @@ func New(c interface{}, initialConns uint32) (ConnectionPool, error) {
 		config.Providers = append(config.Providers, t)
 		config.Name = t.Name
 	default:
-		return nil, errors.New("configuration must be type *Config or *Multiconfig")
+		return nil, errWrongConfigType
 	}
 
 	if len(config.Providers) == 0 {
-		return nil, errors.New("no provider configuration provided")
+		return nil, errNoProviderConfig
 	}
 
 	pool := new(connectionPool)
