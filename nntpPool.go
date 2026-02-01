@@ -206,6 +206,12 @@ func (cp *connectionPool) Get(ctx context.Context) (*NNTPConn, error) {
 func (cp *connectionPool) Put(conn *NNTPConn) {
 	cp.connsMutex.Lock()
 	if !cp.closed {
+		if conn.closed {
+			cp.debug("closing returned connection because it is already closed")
+			cp.connsMutex.Unlock()
+			cp.closeConn(conn)
+			return
+		}
 		select {
 		case cp.connsChan <- NNTPConn{Conn: conn.Conn, timestamp: time.Now()}:
 			cp.connsMutex.Unlock()
@@ -234,7 +240,7 @@ func (cp *connectionPool) Close() {
 		close(cp.connsChan)
 		cp.debug("closing open connections")
 		for conn := range cp.connsChan {
-			conn.close()
+			conn.Close()
 		}
 	}
 	cp.closed = true
@@ -390,11 +396,17 @@ func (cp *connectionPool) closeConn(conn *NNTPConn) {
 	defer cp.connsMutex.Unlock()
 	cp.conns--
 	cp.connAttempts--
-	conn.close()
+	conn.Close()
 	cp.debug(fmt.Sprintf("connection closed (%v of %v connections available)", cp.conns, cp.serverLimit))
 }
 
 func (cp *connectionPool) checkConnIsHealthy(conn NNTPConn) bool {
+	// closing already closed connection
+	if conn.closed {
+		cp.debug("closing already closed connection")
+		cp.closeConn(&conn)
+		return false
+	}
 	// closing expired connection
 	if cp.idleTimeout > 0 &&
 		conn.timestamp.Add(cp.idleTimeout).Before(time.Now()) {
@@ -434,7 +446,7 @@ func (cp *connectionPool) debug(text string) {
 	}
 }
 
-func (c *NNTPConn) close() {
+func (c *NNTPConn) Close() {
 	if !c.closed {
 		if c.Conn != nil {
 			go c.Conn.Quit()
