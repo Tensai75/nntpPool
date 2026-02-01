@@ -240,7 +240,7 @@ func (cp *connectionPool) Close() {
 		close(cp.connsChan)
 		cp.debug("closing open connections")
 		for conn := range cp.connsChan {
-			conn.close()
+			conn.Close()
 		}
 	}
 	cp.closed = true
@@ -323,7 +323,7 @@ func (cp *connectionPool) closeConn(conn *NNTPConn) {
 	conn.provider.conns--
 	conn.provider.connAttempts--
 	conn.provider.connsMutex.Unlock()
-	conn.close()
+	conn.Close()
 	cp.debug(fmt.Sprintf("connection closed (%v of %v connections available)", cp.conns, cp.poolLimit))
 }
 
@@ -374,7 +374,7 @@ func (cp *connectionPool) debug(text string) {
 	}
 }
 
-func (c *NNTPConn) close() {
+func (c *NNTPConn) Close() {
 	if !c.closed {
 		if c.Conn != nil {
 			go c.Conn.Quit()
